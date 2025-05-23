@@ -1,0 +1,17 @@
+.item-detail-container {
+  padding: 10px;
+  background-color: #f8f9fa; // Light background for the pre block
+  border-radius: 4px;
+  max-height: 65vh; // Ensure it fits well within modal
+  overflow-y: auto;
+
+  pre {
+    margin: 0;
+    white-space: pre-wrap; // Wrap long lines
+    word-break: break-all; // Break long words/strings
+    font-size: 0.85em;
+    code {
+      font-family: 'Courier New', Courier, monospace;
+    }
+  }
+}

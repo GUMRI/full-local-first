@@ -290,6 +290,82 @@ When replication is configured, the `list` factory will automatically initialize
     *   `ReplicationEngine` (internal, managed by `list` factory).
 *   **Types**: Core interfaces like `Item`, `ListOptions`, `FileInput`, `StoredFile`, `BaseItem`, etc., are exported from the library.
 
+## Development Studio Component
+
+This library includes a built-in Angular component, `LfStudioMainComponent`, designed to help you explore and understand your local data during development.
+
+**Features:**
+
+*   **List Selection**: Select from active `ListRef` instances that you provide to the component.
+*   **Item Viewing**: View items from the selected list in a paginated table.
+*   **JSON Detail**: Inspect the full JSON data for any item.
+*   **Replication Queue**: See the current items in the replication push queue for the selected list.
+
+**How to Use:**
+
+1.  **Import `LfStudioModule`**:
+    In your Angular module where you want to use the studio (e.g., `app.module.ts` or a specific development module), import `LfStudioModule` from the library.
+
+    ```typescript
+    // app.module.ts (or your specific module)
+    import { LfStudioModule } from 'local-first'; // Or actual path to library
+    import { isDevMode, NgModule } from '@angular/core';
+    import { CommonModule } from '@angular/common'; // Required if LfStudioModule uses CommonModule directives
+
+    @NgModule({
+      imports: [
+        CommonModule, // Example other imports
+        // Only import LfStudioModule in development mode
+        isDevMode() ? LfStudioModule : []
+      ],
+      // ... other module configurations
+    })
+    export class AppModule { }
+    ```
+
+2.  **Provide `ListRef` Instances**:
+    In the component where you want to display the studio, pass an array of your active `ListRef` instances to the `listRefs` input of the `lf-studio-main` component.
+
+    ```typescript
+    // your-dev-component.component.ts
+    import { Component } from '@angular/core';
+    import { ListRef, list, LocalForageService, EventBusService, ListOptions } from 'local-first'; // Adjust path
+
+    // Define your item types (e.g., Task, Note)
+    interface Task { name: string; done: boolean; }
+    interface Note { content: string; color: string; }
+
+    @Component({
+      selector: 'app-dev-panel',
+      template: `
+        <h3>My Development Data Studio</h3>
+        <lf-studio-main [listRefs]="activeLists"></lf-studio-main>
+      `
+    })
+    export class DevPanelComponent {
+      activeLists: ListRef<any, any>[] = [];
+      
+      // Assuming you have LocalForageService and EventBusService instances
+      constructor(
+        private localForageService: LocalForageService, // Inject or instantiate
+        private eventBusService: EventBusService     // Inject or instantiate
+      ) {
+        const taskOptions: ListOptions<Task> = { name: 'tasks', fields: { name: 'text', done: 'boolean'}, uniqueFields: [['name']] };
+        const noteOptions: ListOptions<Note> = { name: 'notes', fields: { content: 'text', color: 'text'}, uniqueFields: [] };
+
+        const tasksList = list<Task>(taskOptions, this.localForageService, this.eventBusService);
+        const notesList = list<Note>(noteOptions, this.localForageService, this.eventBusService);
+        
+        this.activeLists = [tasksList, notesList];
+      }
+    }
+    ```
+
+3.  **Place the Component**:
+    Add `<lf-studio-main [listRefs]="yourListRefArray"></lf-studio-main>` to your component's template.
+
+This component is intended for development and debugging purposes and should typically not be included in a production build.
+
 ## Contributing (Optional Placeholder)
 
 Contributions are welcome! Please open an issue or submit a pull request.

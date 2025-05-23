@@ -1,0 +1,29 @@
+<div class="list-view-container">
+  <h4>{{ listRef.listName }} - Items</h4>
+  <p *ngIf="totalItems() === 0">No items in this list.</p>
+  <div *ngIf="totalItems() > 0">
+    <table>
+      <thead>
+        <tr>
+          <th *ngFor="let col of displayedColumns()">{{ col }}</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let item of paginatedItems()">
+          <td *ngFor="let col of displayedColumns()" title="{{ getItemValue(item, col) }}">
+            {{ getItemValue(item, col) | slice:0:100 }}{{ getItemValue(item, col).length > 100 ? '...' : '' }}
+          </td>
+          <td>
+            <button (click)="onViewJson(item)">View JSON</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pagination-controls">
+      <button (click)="prevPage()" [disabled]="currentPage() === 1">Previous</button>
+      <span>Page {{ currentPage() }} of {{ totalPages() }} (Total: {{ totalItems() }})</span>
+      <button (click)="nextPage()" [disabled]="currentPage() === totalPages()">Next</button>
+    </div>
+  </div>
+</div>
