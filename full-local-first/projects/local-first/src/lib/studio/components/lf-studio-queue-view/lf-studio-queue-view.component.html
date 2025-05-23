@@ -1,0 +1,30 @@
+<div class="queue-view-container">
+  <h4>Replication Push Queue ({{ listRef.listName }})</h4>
+  <div *ngIf="pushQueue().length === 0" class="empty-queue-message">
+    Push queue is empty.
+  </div>
+  <table *ngIf="pushQueue().length > 0">
+    <thead>
+      <tr>
+        <th>Item ID</th>
+        <th>Action</th>
+        <th>Status</th>
+        <th>Attempts</th>
+        <th>Timestamp</th>
+        <th>Data Snippet</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let qItem of pushQueue()">
+        <td title="{{ qItem.itemId }}">{{ qItem.itemId | slice:0:15 }}...</td>
+        <td>{{ qItem.action }}</td>
+        <td>{{ qItem.status }}</td>
+        <td>{{ qItem.attempts }}</td>
+        <td>{{ qItem.timestamp | date:'short' }}</td>
+        <td title="{{ getItemDataSnippet(qItem) }}">{{ getItemDataSnippet(qItem) }}</td>
+        <td title="{{ getErrorMessage(qItem.error) }}">{{ getErrorMessage(qItem.error) | slice:0:50 }}{{ (getErrorMessage(qItem.error).length > 50) ? '...' : '' }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
