@@ -1,0 +1,44 @@
+<div class="lf-studio-container">
+  <header>
+    <h2>LocalFirst Dev Studio</h2>
+    <div class="list-selector" *ngIf="listRefs.length > 0">
+      <label for="list-select">Select List:</label>
+      <select id="list-select" (change)="onListSelectionChange($event)">
+        <option value="">-- Select a List --</option>
+        <option *ngFor="let ref of listRefs; let i = index" [value]="i">
+          {{ ref.listName }} <!-- Assuming ListRef has a listName property -->
+        </option>
+      </select>
+    </div>
+    <div *ngIf="listRefs.length === 0">
+      <p>No ListRefs provided to the studio.</p>
+    </div>
+  </header>
+
+  <main *ngIf="selectedListRef()">
+    <h3>Inspecting: {{ selectedListRef()?.listName }}</h3> <!-- Assuming ListRef has a listName property -->
+    <div class="studio-section">
+      <h4>Items View</h4>
+      <lf-studio-list-view [listRef]="selectedListRef()!" (viewItemDetail)="openItemDetailModal($event)"></lf-studio-list-view>
+      <p>Selected List Status: {{ selectedListRef()?.status() }}</p>
+      <p>Item Count: {{ selectedListRef()?.count() }}</p>
+    </div>
+
+    <div class="studio-section">
+      <h4>Replication Push Queue</h4>
+      <lf-studio-queue-view [listRef]="selectedListRef()!"></lf-studio-queue-view>
+      <!-- Accessing replicationStatus$ which is a Signal<boolean> from ReplicationEngine -->
+      <p>Replication Active: {{ selectedListRef()?.replicationStatus$() ? 'Yes' : 'No' }}</p>
+    </div>
+  </main>
+
+  <div *ngIf="showItemDetailModal()" class="modal-overlay" (click)="closeItemDetailModal()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <header class="modal-header">
+        <h4>Item JSON Detail</h4>
+        <button (click)="closeItemDetailModal()" class="close-button">&times;</button>
+      </header>
+      <lf-studio-item-detail [itemJson]="itemDetailJson()"></lf-studio-item-detail>
+    </div>
+  </div>
+</div>

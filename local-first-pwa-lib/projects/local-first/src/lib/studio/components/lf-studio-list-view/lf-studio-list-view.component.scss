@@ -1,0 +1,26 @@
+.list-view-container {
+  margin-top: 10px;
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+      max-width: 200px; /* Prevent very wide columns */
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    th { background-color: #f2f2f2; }
+    button { font-size: 0.9em; padding: 3px 6px; }
+  }
+  .pagination-controls {
+    margin-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    button { padding: 5px 10px; }
+  }
+}

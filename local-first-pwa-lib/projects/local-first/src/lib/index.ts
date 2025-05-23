@@ -18,3 +18,6 @@ export * from './list.factory';
 // However, the prompt focuses on the 'list' factory and its types/services.
 // The original local-first.service and .component might be deprecated or refactored
 // by the introduction of the list factory. For now, only exporting what's clearly part of the new system.
+
+// Export the Studio Module
+export * from './studio/studio.module';
