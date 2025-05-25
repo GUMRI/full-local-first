@@ -1,18 +1,41 @@
-import { Component, OnInit, OnDestroy, effect, inject } from '@angular/core';
-import { CommonModule } from '@angular/common'; // Import CommonModule
+// In app.component.ts
+import { Component, OnInit, OnDestroy, effect, inject, Signal } from '@angular/core'; // Added Signal
+import { CommonModule, JsonPipe, DatePipe } from '@angular/common'; // Added DatePipe
 import { RouterOutlet } from '@angular/router';
-import { LeaderElectionService } from './workers/LeaderElection.ts'; // Adjusted path to .ts
-import { SharedWorkerService, SharedWorkerStatus } from './workers/SharedWorker.ts'; // Adjusted path to .ts
-import { FormsModule } from '@angular/forms'; // For ngModel if using input for messages
+import { FormsModule } from '@angular/forms'; 
+
+import { LeaderElectionService } from './workers/LeaderElectionService.ts'; // Ensure .ts
+import { SharedWorkerService, SharedWorkerStatus } from './workers/SharedWorkerService.ts'; // Ensure .ts
+import { SharedDataService } from './services/shared-data.service.ts'; // <-- Import SharedDataService & ensure .ts
+
+// Define an interface for the expected structure of sharedData.value for the template
+interface MyDemoSharedValue {
+  message: string;
+  randomNumber: number;
+  fetchedAt: string;
+}
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterOutlet, FormsModule], // Add CommonModule & FormsModule
+  imports: [CommonModule, RouterOutlet, FormsModule, JsonPipe, DatePipe], // JsonPipe & DatePipe for displaying object
   template: `
     <h1>App Component - Leader Election & SharedWorker Demo</h1>
     <p>My Tab ID: <strong>{{ leaderElectionService.instanceId }}</strong></p>
     <p>Am I Leader? <strong>{{ isLeader() }}</strong></p>
+    
+    <hr>
+    <h2>Shared Data (from Leader via BroadcastChannel)</h2>
+    <div *ngIf="currentSharedData(); else noSharedData">
+      <p>Source Tab (Leader ID): <strong>{{ currentSharedData()?.sourceInstanceId }}</strong></p>
+      <p>Data Timestamp: <strong>{{ currentSharedData()?.timestamp | date:'mediumTime' }}</strong></p>
+      <div>
+        <p>Value:</p>
+        <pre>{{ currentSharedData()?.value | json }}</pre>
+      </div>
+    </div>
+    <ng-template #noSharedData><p>No shared data received yet, or I am the leader initially not broadcasting to myself in this view.</p></ng-template>
+
     <hr>
     <h2>Shared Worker</h2>
     <p>Connection Status: <strong>{{ workerStatus() }}</strong></p>
@@ -31,52 +54,44 @@ import { FormsModule } from '@angular/forms'; // For ngModel if using input for 
       <h4>Last Message from SharedWorker:</h4>
       <pre>{{ lastWorkerMessage() | json }}</pre>
     </div>
-    
-    <!-- Studio Component can be here if needed -->
-    <!-- <app-studio [listRefs]="listRefsSignal()"></app-studio> -->
   `,
   styles: [`
     h1, h2, p { margin-bottom: 10px; }
     h4 { margin-top: 15px; margin-bottom: 5px;}
     button { margin-right: 5px; margin-bottom: 5px;}
     input[type="text"] { margin-right: 5px; padding: 4px; }
-    pre { background-color: #f0f0f0; padding: 10px; border-radius: 3px; }
+    pre { background-color: #f0f0f0; padding: 10px; border-radius: 3px; white-space: pre-wrap; }
     hr { margin: 20px 0; }
   `]
 })
 export class AppComponent implements OnInit, OnDestroy {
-  title = 'file-storage-app'; // Default from Angular new
+  title = 'file-storage-app';
   
-  // Injected services
-  public leaderElectionService = inject(LeaderElectionService); // Use inject for cleaner DI
+  public leaderElectionService = inject(LeaderElectionService);
   public sharedWorkerService = inject(SharedWorkerService);
+  public sharedDataService = inject(SharedDataService); // <-- Inject SharedDataService
 
-  // Signals for template binding
   isLeader = this.leaderElectionService.isLeader;
   workerStatus = this.sharedWorkerService.connectionStatus;
   lastWorkerMessage = this.sharedWorkerService.receivedMessage;
+  currentSharedData = this.sharedDataService.sharedData; // <-- Expose sharedData signal
 
-  messageText: string = ''; // For custom message input
+  messageText: string = '';
 
   constructor() {
     console.log('[AppComponent] Constructor - My Tab ID:', this.leaderElectionService.instanceId);
 
-    // Effect for leader-specific actions
     effect(() => {
       const currentIsLeader = this.isLeader();
       console.log(`[AppComponent] Leadership status changed: ${currentIsLeader}. My ID: ${this.leaderElectionService.instanceId}`);
       
       if (currentIsLeader) {
         console.log(`[AppComponent] This tab (${this.leaderElectionService.instanceId}) became LEADER.`);
-        // Ensure worker is connected if this tab is leader
         if (this.sharedWorkerService.connectionStatus() !== 'connected' &&
             this.sharedWorkerService.connectionStatus() !== 'connecting' &&
             this.sharedWorkerService.connectionStatus() !== 'unsupported') {
           this.sharedWorkerService.connect();
         }
-        
-        // Send a leader announcement message to the worker
-        // Adding a slight delay to allow connection to establish if just connected.
         setTimeout(() => {
           if (this.sharedWorkerService.connectionStatus() === 'connected') {
             this.sharedWorkerService.sendMessage({ 
@@ -85,21 +100,26 @@ export class AppComponent implements OnInit, OnDestroy {
               timestamp: new Date().toISOString()
             });
           }
-        }, 1000); // 1 sec delay
+        }, 1000);
       } else {
         console.log(`[AppComponent] This tab (${this.leaderElectionService.instanceId}) is NOT leader.`);
-        // Optionally, if non-leaders should disconnect or behave differently with SharedWorker.
-        // For this demo, all tabs can remain connected if they choose to.
       }
+    });
+
+    // Effect to log shared data changes for debugging
+    effect(() => {
+        const data = this.currentSharedData();
+        if (data) {
+            console.log(`[AppComponent-${this.leaderElectionService.instanceId}] Detected change in sharedData:`, data);
+        }
     });
   }
 
   ngOnInit(): void {
-    // Manually connect if not leader, or if auto-connect is not in SharedWorkerService constructor
-    // For this demo, any tab can try to connect. Leader effect handles specific leader actions.
-    // if (this.sharedWorkerService.connectionStatus() === 'disconnected') {
-    //  this.sharedWorkerService.connect();
-    // }
+    // Auto-connect SharedWorker for all tabs for this demo, leader specific messages are handled by effect.
+     if (this.sharedWorkerService.connectionStatus() === 'disconnected') {
+       this.sharedWorkerService.connect();
+     }
   }
 
   connectWorker(): void {
@@ -118,15 +138,14 @@ export class AppComponent implements OnInit, OnDestroy {
       }
       this.sharedWorkerService.sendMessage(messagePayload);
       if (actionType === 'CUSTOM_MESSAGE') {
-        this.messageText = ''; // Clear input after sending custom message
+        this.messageText = '';
       }
     } else {
       console.warn('[AppComponent] Cannot send message, SharedWorker not connected.');
-      // Optionally, try to connect: this.sharedWorkerService.connect();
     }
   }
 
   ngOnDestroy(): void {
-    // Services should clean up themselves (LeaderElectionService and SharedWorkerService have ngOnDestroy)
+    // Services should clean up themselves
   }
 }
