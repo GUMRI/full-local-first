@@ -1,0 +1,37 @@
+<div *ngFor="let listRef of listRefsSignal(); let i = index" class="list-container">
+  <h3>{{ getListName(listRef) }} (Status: {{ listRef.status() }})</h3>
+  
+  <div *ngIf="listRef.status() === 'loading'" class="loading-spinner">
+    <mat-spinner diameter="50"></mat-spinner>
+  </div>
+
+  <div *ngIf="listRef.currentError()" class="error-message">
+    <p>Error: {{ listRef.currentError() | json }}</p>
+  </div>
+
+  <table mat-table [dataSource]="listRef.filteredItems()" class="mat-elevation-z8" 
+         *ngIf="listRef.filteredItems()?.length && listRef.status() !== 'loading'">
+    <!-- ID Column -->
+    <ng-container matColumnDef="_id">
+      <th mat-header-cell *matHeaderCellDef> ID </th>
+      <td mat-cell *matCellDef="let element"> {{element['_id']}} </td>
+    </ng-container>
+
+    <!-- Dynamic Columns -->
+    <ng-container *ngFor="let column of getDynamicColumnKeys(listRef)">
+      <ng-container matColumnDef="{{column}}">
+        <th mat-header-cell *matHeaderCellDef> {{ column }} </th>
+        <td mat-cell *matCellDef="let element">
+          {{ renderCell(element, column, listRef.options.fields[column]) }}
+        </td>
+      </ng-container>
+    </ng-container>
+
+    <tr mat-header-row *matHeaderRowDef="getDisplayedColumns(listRef)"></tr>
+    <tr mat-row *matRowDef="let row; columns: getDisplayedColumns(listRef);"></tr>
+  </table>
+  
+  <p *ngIf="!(listRef.filteredItems()?.length) && listRef.status() === 'loaded'" class="empty-message">
+    No items to display for {{ getListName(listRef) }}.
+  </p>
+</div>
