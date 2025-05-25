@@ -47,4 +47,11 @@ export interface ListRef<T> {
   // File State Methods (if part of public API)
   setFileState(itemId: string, fileResults: FileResult[]): void;
   updateFileProgress(itemId: string, fileId: string, progress: number, isLoading: boolean): void;
+
+  // Client Query Methods
+  setClientQuery(args: FilterArgs<T> | null): void;
+  getClientQuery(): FilterArgs<T> | null;
+
+  // Pagination-related state
+  totalFilteredCount: Signal<number>; 
 }

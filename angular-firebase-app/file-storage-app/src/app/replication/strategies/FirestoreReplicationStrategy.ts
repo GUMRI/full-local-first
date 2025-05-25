@@ -2,11 +2,20 @@ import {
   ReplicationStrategy, Checkpoint, ReplicationPullResult, ReplicationPushResult
 } from '../replication.model';
 import { Item, ListOptions } from '../../models/list.model';
+import { FileReplicationInput } from '../../models/file.model';
 import {
   Firestore, collection, query, where, getDocs, Timestamp,
-  doc, writeBatch, serverTimestamp, collectionGroup, orderBy
+  doc, writeBatch, serverTimestamp, orderBy
 } from '@angular/fire/firestore';
-import { FirebaseStorage } from '@angular/fire/storage';
+// Firebase Storage imports
+import { 
+  FirebaseStorage,
+  ref as storageRef, 
+  uploadBytesResumable, 
+  getDownloadURL,
+  deleteObject as deleteFileFromStorage, // Ensured import
+  getBlob 
+} from '@angular/fire/storage';
 import { LoggerService } from '../../utils/Logger.ts';
 
 export class FirestoreReplicationStrategy<T extends Record<string, any>> implements ReplicationStrategy<T> {
@@ -29,7 +38,7 @@ export class FirestoreReplicationStrategy<T extends Record<string, any>> impleme
     this.firebaseStorage = firebaseStorage;
     this.logger.info(`FirestoreReplicationStrategy initialized for list: ${this.listOptions.name}`);
   }
-
+  
   async pullChanges(listName: string, currentCheckpoint: Checkpoint): Promise<ReplicationPullResult<T>> {
     if (!this.firestore) {
       throw new Error('Firestore instance not available. Initialize strategy first.');
@@ -41,7 +50,6 @@ export class FirestoreReplicationStrategy<T extends Record<string, any>> impleme
 
     try {
       const itemsCollectionRef = collection(this.firestore, `lists/${listName}/items`);
-      
       const checkpointTimestamp = Timestamp.fromDate(new Date(newLastPulledAtString));
       
       const q = query(
@@ -54,11 +62,11 @@ export class FirestoreReplicationStrategy<T extends Record<string, any>> impleme
       let latestDocTimestampISO = newLastPulledAtString;
 
       querySnapshot.forEach((docSnapshot) => {
-        const data = docSnapshot.data() as T & { createdAt?: any, _updatedAt?: any, _deletedAt?: any }; // More specific type for conversion
+        const data = docSnapshot.data() as T & { createdAt?: any, _updatedAt?: any, _deletedAt?: any }; 
         
         const itemWithConvertedDates: Item<T> = {
-          ...(data as Item<T>), // Base spread
-          _id: docSnapshot.id, // Ensure _id is from docSnapshot.id
+          ...(data as Item<T>), 
+          _id: docSnapshot.id, 
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : String(data.createdAt),
           _updatedAt: data._updatedAt?.toDate ? data._updatedAt.toDate().toISOString() : String(data._updatedAt),
           _deletedAt: data._deletedAt?.toDate ? data._deletedAt.toDate().toISOString() : (data._deletedAt ? String(data._deletedAt) : undefined),
@@ -91,7 +99,6 @@ export class FirestoreReplicationStrategy<T extends Record<string, any>> impleme
       };
     }
   }
-
   async pushChanges(listName: string, itemsToPush: Item<T>[]): Promise<ReplicationPushResult> {
     if (!this.firestore) {
       throw new Error('Firestore instance not available. Initialize strategy first.');
@@ -110,49 +117,35 @@ export class FirestoreReplicationStrategy<T extends Record<string, any>> impleme
 
     for (const item of itemsToPush) {
       try {
-        const { _id, ...payloadWithoutId } = item; // Separate _id from the rest of the payload
-        
-        // Defensive copy to avoid mutating original item object
+        const { _id, ...payloadWithoutId } = item; 
         const firestorePayload: Record<string, any> = { ...payloadWithoutId };
 
-        // Convert dates to Firestore Timestamps
         if (firestorePayload.createdAt && typeof firestorePayload.createdAt === 'string') {
           firestorePayload.createdAt = Timestamp.fromDate(new Date(firestorePayload.createdAt));
         }
         if (firestorePayload._updatedAt && typeof firestorePayload._updatedAt === 'string') {
-          // For _updatedAt, it's common to use serverTimestamp() to ensure accuracy,
-          // especially if this push is an update. If it's a new item or local _updatedAt is authoritative,
-          // convert from string. For now, convert local string.
           firestorePayload._updatedAt = Timestamp.fromDate(new Date(firestorePayload._updatedAt));
         } else {
-          // If _updatedAt is missing, or for ensuring server sets it on new docs if local isn't set
            firestorePayload._updatedAt = serverTimestamp(); 
         }
 
         if (firestorePayload._deletedAt && typeof firestorePayload._deletedAt === 'string') {
           firestorePayload._deletedAt = Timestamp.fromDate(new Date(firestorePayload._deletedAt));
         } else if (firestorePayload._deleted && !firestorePayload._deletedAt) {
-          // If it's marked deleted but no _deletedAt, set it to now (server time)
           firestorePayload._deletedAt = serverTimestamp();
         }
         
-        // TODO: File handling placeholder
-        // Iterate over fields of type 'file' in listOptions.fields
-        // If item[fieldKey] contains a file ID and this.firebaseStorage is available,
-        // this is where one would initiate a file upload if the file isn't already uploaded.
-        // For now, we assume file IDs are just data. Actual file blob push is complex.
         Object.keys(this.listOptions.fields).forEach(fieldKey => {
             if (this.listOptions.fields[fieldKey as keyof T] === 'file') {
                 const fileId = item[fieldKey as keyof T];
                 if (fileId && this.firebaseStorage) {
-                    this.logger.debug(`File field '${String(fieldKey)}' with ID '${fileId}' needs push. Actual file push not implemented yet.`);
-                    // Example: payload[fieldKey] = { id: fileId, path: `lists/${listName}/files/${fileId}` };
+                    this.logger.debug(`File field '${String(fieldKey)}' with ID '${String(fileId)}' needs push. Actual file push not implemented yet in item metadata push.`);
                 }
             }
         });
 
         const itemDocRef = doc(this.firestore, `lists/${listName}/items/${_id}`);
-        batch.set(itemDocRef, firestorePayload, { merge: true }); // Use merge:true for upsert behavior
+        batch.set(itemDocRef, firestorePayload, { merge: true }); 
         successfulItemIds.push(_id);
 
       } catch (error) {
@@ -167,15 +160,111 @@ export class FirestoreReplicationStrategy<T extends Record<string, any>> impleme
       this.logger.info(`Batch committed for list ${listName}. Success: ${successfulItemIds.length}, Failures (in prep): ${failedItemIds.length}`);
     } catch (batchError) {
       this.logger.error(`Error committing batch for list ${listName}:`, batchError);
-      // All items in the batch are considered failed if the batch commit fails
-      // Return all originally attempted items as failed (excluding those that failed in prep)
-      const prepSuccessIds = [...successfulItemIds]; // copy
-      successfulItemIds.length = 0; // Clear successful ones as batch failed
-      // failedItemIds should now include all items that were in successfulItemIds before batch failure
+      const prepSuccessIds = [...successfulItemIds]; 
+      successfulItemIds.length = 0; 
       failedItemIds.push(...prepSuccessIds); 
-      errors.push({ batchError }); // Add batch error to general errors
+      errors.push({ batchError }); 
     }
 
     return { successfulItemIds, failedItemIds, errors };
+  }
+
+  async pushFile(
+    fileInput: FileReplicationInput,
+    listOptions: Readonly<ListOptions<T>>
+  ): Promise<{ storagePath: string; downloadUrl?: string }> {
+    if (!this.firebaseStorage) {
+      this.logger.error('[FirestoreStrategy] FirebaseStorage instance not available. Initialize strategy with firebaseStorage configuration.');
+      throw new Error('FirebaseStorage instance not available.');
+    }
+
+    const { id: fileId, name: fileName, data: fileBlob, itemId, fieldKey } = fileInput;
+    const listContextName = listOptions.name; 
+
+    const filePath = `lists/${listContextName}/items/${itemId}/${fieldKey}/${fileId}-${fileName}`;
+    const fileStorageRef = storageRef(this.firebaseStorage, filePath);
+
+    this.logger.info(`[FirestoreStrategy] Uploading file ${fileName} (ID: ${fileId}) to ${filePath}`);
+
+    try {
+      const uploadTask = uploadBytesResumable(fileStorageRef, fileBlob);
+      await uploadTask; 
+      
+      this.logger.info(`[FirestoreStrategy] File ${fileName} uploaded successfully to ${filePath}.`);
+
+      let downloadUrl: string | undefined = undefined;
+      try {
+        downloadUrl = await getDownloadURL(fileStorageRef);
+        this.logger.debug(`[FirestoreStrategy] Got download URL for ${filePath}: ${downloadUrl}`);
+      } catch (urlError) {
+        this.logger.warn(`[FirestoreStrategy] Could not get download URL for ${filePath}:`, urlError);
+      }
+
+      return {
+        storagePath: filePath,
+        downloadUrl: downloadUrl
+      };
+
+    } catch (error) {
+      this.logger.error(`[FirestoreStrategy] Error uploading file ${fileName} (ID: ${fileId}) to ${filePath}:`, error);
+      throw error; 
+    }
+  }
+
+  async pullFile(
+    fileMeta: { id: string; storagePath: string; fileName: string; }, 
+    listOptions: Readonly<ListOptions<T>> 
+  ): Promise<Blob> {
+    if (!this.firebaseStorage) {
+      this.logger.error('[FirestoreStrategy] FirebaseStorage instance not available for pulling file.');
+      throw new Error('FirebaseStorage instance not available.');
+    }
+
+    const { storagePath, id: fileId, fileName } = fileMeta;
+    this.logger.info(`[FirestoreStrategy] Pulling file ID ${fileId} (name: ${fileName}) from path: ${storagePath}`);
+
+    try {
+      const fileStorageRef = storageRef(this.firebaseStorage, storagePath);
+      const blob = await getBlob(fileStorageRef);
+      this.logger.info(`[FirestoreStrategy] File ID ${fileId} (name: ${fileName}) pulled successfully from ${storagePath}. Size: ${blob.size}`);
+      return blob;
+    } catch (error) {
+      this.logger.error(`[FirestoreStrategy] Error pulling file ID ${fileId} (name: ${fileName}) from ${storagePath}:`, error);
+      if ((error as any).code === 'storage/object-not-found') {
+        throw new Error(`File not found at path: ${storagePath}`); 
+      }
+      throw error; 
+    }
+  }
+
+  // --- Updated deleteFile method ---
+  async deleteFile(
+    fileMeta: { id: string; storagePath: string; },
+    listOptions: Readonly<ListOptions<T>> // listOptions available for context
+  ): Promise<void> {
+    if (!this.firebaseStorage) {
+      this.logger.warn('[FirestoreStrategy] FirebaseStorage instance not available. Cannot delete file.');
+      // Depending on desired behavior, either throw an error or return gracefully.
+      // Throwing an error might be better to signal that the operation couldn't be performed.
+      throw new Error('FirebaseStorage instance not available. Initialize strategy with firebaseStorage configuration.');
+    }
+
+    const { storagePath, id: fileId } = fileMeta;
+    this.logger.info(`[FirestoreStrategy] Deleting file ID ${fileId} from path: ${storagePath}`);
+
+    try {
+      const fileStorageRef = storageRef(this.firebaseStorage, storagePath);
+      await deleteFileFromStorage(fileStorageRef); // Use the imported deleteObject
+      this.logger.info(`[FirestoreStrategy] File ID ${fileId} deleted successfully from ${storagePath}.`);
+    } catch (error) {
+      this.logger.error(`[FirestoreStrategy] Error deleting file ID ${fileId} from ${storagePath}:`, error);
+      // Check for specific errors, e.g., 'storage/object-not-found'
+      // If file is already not found, it's effectively deleted from storage perspective.
+      if ((error as any).code === 'storage/object-not-found') {
+        this.logger.warn(`[FirestoreStrategy] File not found at path ${storagePath} during delete attempt. Considering it deleted.`);
+        return; // Success, as the file isn't there.
+      }
+      throw error; // Re-throw other errors
+    }
   }
 }

@@ -1,7 +1,7 @@
-import { Signal, effect, untracked } from '@angular/core';
+import { Signal, effect, untracked, WritableSignal, signal, computed } from '@angular/core'; // Added WritableSignal, signal, computed
 import {
   ListRef, ListOptions, Item, CreateItemInput, UpdateItemInput,
-  FilterArgs 
+  FilterArgs
 } from '../models/list.model';
 import { FileResult } from '../models/file.model';
 import { ListStateImpl, ListStatus } from './ListStateImpl';
@@ -21,10 +21,14 @@ export class ListImpl<T extends Record<string, any>> implements ListRef<T> {
   public readonly deletedItems: Signal<Item<T>[]>;
   public readonly currentError: Signal<any | null>;
   public readonly filesState: Signal<Map<string, FileResult[]>>;
+  public readonly totalFilteredCount: Signal<number>; // <-- New signal exposure
 
   private listState: ListStateImpl<T>;
   private listCRUD: ListCRUDImpl<T>;
   private listQueries: ListQueriesImpl<T>;
+
+  // New signal for client-side query arguments (e.g., from StudioComponent)
+  private clientQueryArgs: WritableSignal<FilterArgs<T> | null> = signal(null);
 
   constructor(
     listOptions: Readonly<ListOptions<T>>,
@@ -49,25 +53,41 @@ export class ListImpl<T extends Record<string, any>> implements ListRef<T> {
     this.deletedItems = this.listState.deletedItems;
     this.currentError = this.listState.currentError;
     this.filesState = this.listState.filesState;
+    this.totalFilteredCount = this.listState.totalFilteredCount.asReadonly(); // <-- Expose as readonly
+
 
     this._loadInitialData();
 
-    if (this.options.queries) {
-      effect(() => {
-        const currentItems = this.items();
-        const filterArgs = this.options.queries!(); // Non-null assertion as it's checked
-        // Use untracked for query to avoid re-running effect if query itself causes signal changes
-        const results = untracked(() => this.listQueries.query(currentItems, filterArgs));
-        this.listState.applyFilteredItems(results);
-      });
-    } else {
-      // If no queries signal, filteredItems should just mirror items
-      effect(() => {
-        const currentItems = this.items();
-        // Use untracked to prevent potential circular dependencies if applyFilteredItems somehow affects items
-        untracked(() => this.listState.applyFilteredItems(currentItems));
-      });
-    }
+    // Combined query signal for the effect
+    const combinedQueryArgs = computed(() => {
+      const externalQuery = this.options.queries ? this.options.queries() : ({} as FilterArgs<T>);
+      const clientQuery = this.clientQueryArgs() || ({} as FilterArgs<T>);
+      
+      // Client query takes precedence for properties it defines.
+      // 'where' clauses are tricky to merge; for now, client 'where' overrides external 'where'.
+      // A more advanced merge could combine 'where' conditions if needed.
+      const mergedArgs: FilterArgs<T> = {
+        ...externalQuery,
+        ...clientQuery, // This will let clientQuery fields overwrite externalQuery fields
+        // If specific merge strategies are needed per field (e.g. for 'where'), handle them explicitly:
+        // where: clientQuery.where || externalQuery.where, // Example: client takes precedence
+      };
+      
+      // Ensure empty args object if no queries are set
+      if (Object.keys(mergedArgs).length === 0) return {} as FilterArgs<T>;
+      return mergedArgs;
+    });
+
+    // Effect for dynamic queries
+    effect(() => {
+      const currentItems = this.items(); // Depend on items signal
+      const finalQueryArgs = combinedQueryArgs(); // Depend on combined query signal
+      
+      // query method now returns an object { items: Item<T>[], totalCount: number }
+      const queryResult = untracked(() => this.listQueries.query(currentItems, finalQueryArgs));
+      // Use the modified method in ListStateImpl
+      this.listState.applyFilteredResult(queryResult.items, queryResult.totalCount); // <-- Update
+    });
   }
 
   private async _loadInitialData(): Promise<void> {
@@ -218,5 +238,25 @@ export class ListImpl<T extends Record<string, any>> implements ListRef<T> {
 
   updateFileProgress(itemId: string, fileId: string, progress: number, isLoading: boolean): void {
     this.listState.updateFileProgress(itemId, fileId, progress, isLoading);
+  }
+
+  // New methods for ReplicationEngine to call:
+  public setSyncStatus(status: ListStatus): void {
+    // This method allows an external service (like ReplicationEngine) to update the list's status.
+    // It assumes that ListStateImpl's status signal is indeed a WritableSignal.
+    this.listState.setStatus(status);
+  }
+
+  public setSyncError(error: any | null): void {
+    this.listState.setError(error); // setError in ListStateImpl also sets status to 'error' if error is not null
+  }
+
+  // New public method for StudioComponent or other clients to set/update client-side query
+  public setClientQuery(args: FilterArgs<T> | null): void {
+    this.clientQueryArgs.set(args);
+  }
+
+  public getClientQuery(): FilterArgs<T> | null { 
+    return this.clientQueryArgs(); 
   }
 }

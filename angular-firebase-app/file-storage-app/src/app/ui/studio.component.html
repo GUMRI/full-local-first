@@ -1,37 +1,130 @@
-<div *ngFor="let listRef of listRefsSignal(); let i = index" class="list-container">
-  <h3>{{ getListName(listRef) }} (Status: {{ listRef.status() }})</h3>
-  
-  <div *ngIf="listRef.status() === 'loading'" class="loading-spinner">
-    <mat-spinner diameter="50"></mat-spinner>
+<!-- studio.component.html -->
+<div class="studio-container">
+  <mat-tab-group animationDuration="0ms" *ngIf="listRefsSignal().length > 0">
+    <mat-tab *ngFor="let listRef of listRefsSignal(); let i = index" [label]="getListName(listRef)">
+      <ng-template matTabContent>
+        <div class="list-content-container">
+
+          <!-- Toolbar (existing) -->
+          <mat-toolbar color="primary" class="list-toolbar">
+            <div class="toolbar-search">
+              <input type="text" 
+                     placeholder="Search..." 
+                     (input)="onSearchChanged(listRef, ($event.target as HTMLInputElement).value)" 
+                     aria-label="Search list items">
+              <mat-icon>search</mat-icon>
+            </div>
+            <mat-form-field appearance="outline" class="sort-field-select">
+              <mat-label>Sort by</mat-label>
+              <mat-select [value]="getCurrentSort(getListName(listRef))?.field" 
+                          (selectionChange)="applySort(listRef, $event.value)">
+                <mat-option *ngFor="let field of getSortableFields(listRef)" [value]="field">
+                  {{ field }}
+                </mat-option>
+              </mat-select>
+            </mat-form-field>
+            <button mat-icon-button 
+                    *ngIf="getCurrentSort(getListName(listRef))" 
+                    (click)="applySort(listRef, getCurrentSort(getListName(listRef))!.field)"
+                    [matTooltip]="'Toggle sort direction (' + getCurrentSort(getListName(listRef))?.direction + ')'">
+              <mat-icon>{{ getCurrentSort(getListName(listRef))?.direction === 'asc' ? 'arrow_upward' : 'arrow_downward' }}</mat-icon>
+            </button>
+            <button mat-icon-button 
+                    *ngIf="getCurrentSort(getListName(listRef))" 
+                    (click)="clearSort(listRef)"
+                    matTooltip="Clear sort">
+              <mat-icon>sort</mat-icon>
+            </button>
+            <span class="toolbar-spacer"></span>
+            <button mat-icon-button (click)="onFilterClicked(listRef)" matTooltip="Filter items">
+              <mat-icon>filter_list</mat-icon>
+            </button>
+            <button mat-raised-button color="accent" (click)="onAddNewItemClicked(listRef)">
+              <mat-icon>add</mat-icon> Add New Item
+            </button>
+          </mat-toolbar>
+          <!-- End Toolbar -->
+
+          <h3>{{ getListName(listRef) }} (Status: {{ listRef.status() }})</h3>
+          
+          <div *ngIf="listRef.status() === 'loading'" class="loading-spinner">
+            <mat-spinner diameter="50"></mat-spinner>
+          </div>
+          
+           <div *ngIf="listRef.currentError()" class="error-message">
+            <p>Error: {{ listRef.currentError() | json }}</p>
+          </div>
+
+          <table mat-table [dataSource]="listRef.filteredItems()" class="mat-elevation-z8" 
+                 *ngIf="listRef.filteredItems()?.length && listRef.status() !== 'loading'">
+             <ng-container matColumnDef="_id">
+              <th mat-header-cell *matHeaderCellDef> ID </th>
+              <td mat-cell *matCellDef="let element"> {{element['_id']}} </td>
+            </ng-container>
+            
+            <ng-container *ngFor="let column of getDynamicColumnKeys(listRef)">
+              <ng-container matColumnDef="{{column}}">
+                <th mat-header-cell *matHeaderCellDef> {{ column }} </th>
+                <td mat-cell *matCellDef="let element">
+                  <ng-container [ngSwitch]="listRef.options.fields[column]">
+                    <div *ngSwitchCase="'text'" class="editable-cell">
+                      <input type="text" 
+                             [ngModel]="element[column]"
+                             (ngModelChange)="element[column] = $event" 
+                             (blur)="onCellUpdate(element, column, ($event.target as HTMLInputElement).value, listRef, 'text')"
+                             (keydown.enter)="onCellUpdate(element, column, ($event.target as HTMLInputElement).value, listRef, 'text'); ($event.target as HTMLInputElement).blur()"
+                             class="inline-edit-input">
+                    </div>
+                    <div *ngSwitchCase="'number'" class="editable-cell">
+                      <input type="number"
+                             [ngModel]="element[column]"
+                             (ngModelChange)="element[column] = $event"
+                             (blur)="onCellUpdate(element, column, ($event.target as HTMLInputElement).value, listRef, 'number')"
+                             (keydown.enter)="onCellUpdate(element, column, ($event.target as HTMLInputElement).value, listRef, 'number'); ($event.target as HTMLInputElement).blur()"
+                             class="inline-edit-input">
+                    </div>
+                    <div *ngSwitchDefault class="display-cell">
+                      {{ renderCell(element, column, listRef.options.fields[column]) }}
+                    </div>
+                  </ng-container>
+                </td>
+              </ng-container>
+            </ng-container>
+
+            <ng-container matColumnDef="actions">
+              <th mat-header-cell *matHeaderCellDef> Actions </th>
+              <td mat-cell *matCellDef="let element">
+                <button mat-icon-button color="warn" 
+                        (click)="onDeleteItemClicked(element, listRef)" 
+                        matTooltip="Soft delete item">
+                  <mat-icon>delete</mat-icon>
+                </button>
+              </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="getDisplayedColumns(listRef)"></tr>
+            <tr mat-row *matRowDef="let row; columns: getDisplayedColumns(listRef); trackBy: trackById"></tr> 
+          </table>
+          
+          <p *ngIf="!(listRef.filteredItems()?.length) && listRef.status() === 'loaded'" class="empty-message">
+            No items to display for {{ getListName(listRef) }}.
+          </p>
+
+          <!-- New Paginator -->
+          <mat-paginator *ngIf="listRef.totalFilteredCount() > 0 && listRef.status() !== 'loading'"
+                         [length]="listRef.totalFilteredCount()"
+                         [pageSize]="getPaginatorState(getListName(listRef)).pageSize"
+                         [pageIndex]="getPaginatorState(getListName(listRef)).pageIndex"
+                         [pageSizeOptions]="getPaginatorState(getListName(listRef)).pageSizeOptions"
+                         (page)="handlePageEvent(listRef, $event)"
+                         aria-label="Select page">
+          </mat-paginator>
+        </div>
+      </ng-template>
+    </mat-tab>
+  </mat-tab-group>
+
+  <div *ngIf="!listRefsSignal().length" class="no-lists-message">
+    <p>No lists provided to StudioComponent.</p>
   </div>
-
-  <div *ngIf="listRef.currentError()" class="error-message">
-    <p>Error: {{ listRef.currentError() | json }}</p>
-  </div>
-
-  <table mat-table [dataSource]="listRef.filteredItems()" class="mat-elevation-z8" 
-         *ngIf="listRef.filteredItems()?.length && listRef.status() !== 'loading'">
-    <!-- ID Column -->
-    <ng-container matColumnDef="_id">
-      <th mat-header-cell *matHeaderCellDef> ID </th>
-      <td mat-cell *matCellDef="let element"> {{element['_id']}} </td>
-    </ng-container>
-
-    <!-- Dynamic Columns -->
-    <ng-container *ngFor="let column of getDynamicColumnKeys(listRef)">
-      <ng-container matColumnDef="{{column}}">
-        <th mat-header-cell *matHeaderCellDef> {{ column }} </th>
-        <td mat-cell *matCellDef="let element">
-          {{ renderCell(element, column, listRef.options.fields[column]) }}
-        </td>
-      </ng-container>
-    </ng-container>
-
-    <tr mat-header-row *matHeaderRowDef="getDisplayedColumns(listRef)"></tr>
-    <tr mat-row *matRowDef="let row; columns: getDisplayedColumns(listRef);"></tr>
-  </table>
-  
-  <p *ngIf="!(listRef.filteredItems()?.length) && listRef.status() === 'loaded'" class="empty-message">
-    No items to display for {{ getListName(listRef) }}.
-  </p>
 </div>
