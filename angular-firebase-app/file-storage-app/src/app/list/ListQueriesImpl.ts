@@ -1,40 +1,176 @@
-import { Item, FilterArgs } from '../models/list.model';
+// In ListQueriesImpl.ts
+import { Item, FilterArgs, ListOptions, FieldType } from '../models/list.model'; // Keep FieldType for now
+import { IndexedDBManager } from '../utils/IndexedDBManager.ts'; // <-- Import
+import { LoggerService } from '../utils/Logger.ts';       // <-- Import
 
-export interface QueryResult<T> {
+export interface QueryResult<T> { // Ensure this interface is here or imported
   items: Item<T>[];
   totalCount: number;
 }
 
 export class ListQueriesImpl<T extends Record<string, any>> {
+  private indexedDBStoreName: string;
+  private indexedFields: Set<string>;
 
-  constructor(private listName: string) {
-    console.log(`ListQueriesImpl for ${this.listName} initialized`);
+  constructor(
+    private listNameForLog: string, // Kept for logging continuity
+    private listOptions: Readonly<ListOptions<T>>, // <-- For knowing indexed fields
+    private indexedDBManager: IndexedDBManager,   // <-- Injected
+    private logger: LoggerService                 // <-- Injected
+  ) {
+    this.indexedDBStoreName = `list_${this.listOptions.name}`;
+    this.indexedFields = new Set(this.listOptions.indexing || []);
+    this.logger.info(`[ListQueriesImpl-${this.listOptions.name}] Initialized. IndexedDB store: '${this.indexedDBStoreName}', Indexed fields: ${Array.from(this.indexedFields).join(', ')}`);
   }
 
-  public query(items: Readonly<Item<T>[]>, filterArgs?: Readonly<FilterArgs<T>>): QueryResult<T> { // <-- Return QueryResult
-    let processedItems = [...items];
+  // filterByWhere, searchItems, sortItems methods remain largely the same,
+  // but they will operate on data fetched from IDB or the input 'items' array.
 
-    if (filterArgs) {
-      if (filterArgs.where) {
-        processedItems = this.filterByWhere(processedItems, filterArgs.where);
+  private filterByWhere(items: Readonly<Item<T>[]>, where: NonNullable<FilterArgs<T>['where']>): Item<T>[] {
+    // This existing method can be used for in-memory filtering after IDB query
+    return items.filter(item => { 
+      for (const fieldKey in where) {
+        const fieldCondition = where[fieldKey as keyof T];
+        const itemValue = item[fieldKey as keyof T];
+        if (fieldCondition === undefined) continue;
+        // If itemValue is undefined, it should generally not match most conditions unless explicitly handled
+        // e.g., { equals: undefined } or a 'notExists' operator. Current logic implies it won't match.
+        for (const operator in fieldCondition) {
+          const conditionValue = (fieldCondition as any)[operator];
+          let match = true;
+          switch (operator) {
+            case 'equals': match = itemValue === conditionValue; break;
+            case 'in': match = Array.isArray(conditionValue) && conditionValue.includes(itemValue); break;
+            case 'not': match = itemValue !== conditionValue; break;
+            case 'lt': match = itemValue !== undefined && itemValue < conditionValue; break;
+            case 'lte': match = itemValue !== undefined && itemValue <= conditionValue; break;
+            case 'gt': match = itemValue !== undefined && itemValue > conditionValue; break;
+            case 'gte': match = itemValue !== undefined && itemValue >= conditionValue; break;
+            case 'contains':
+              match = typeof itemValue === 'string' && typeof conditionValue === 'string' && itemValue.toLowerCase().includes(conditionValue.toLowerCase());
+              break;
+            case 'startsWith':
+              match = typeof itemValue === 'string' && typeof conditionValue === 'string' && itemValue.toLowerCase().startsWith(conditionValue.toLowerCase());
+              break;
+            case 'endsWith':
+              match = typeof itemValue === 'string' && typeof conditionValue === 'string' && itemValue.toLowerCase().endsWith(conditionValue.toLowerCase());
+              break;
+            default: match = true; 
+          }
+          if (!match) return false; 
+        }
       }
-      if (filterArgs.search && filterArgs.search.value && filterArgs.search.fields.length > 0) {
-        processedItems = this.searchItems(processedItems, filterArgs.search);
+      return true; 
+    });
+  }
+
+  private searchItems(items: Readonly<Item<T>[]>, search: NonNullable<FilterArgs<T>['search']>): Item<T>[] {
+    // This existing method can be used for in-memory filtering
+    const searchTerm = search.value.toLowerCase();
+    return items.filter(item => { 
+      return search.fields.some(fieldKey => {
+        const itemValue = item[fieldKey as keyof T];
+        return typeof itemValue === 'string' && itemValue.toLowerCase().includes(searchTerm);
+      });
+    });
+  }
+
+  private sortItems(items: Item<T>[], orderBy: NonNullable<FilterArgs<T>['orderBy']>): Item<T>[] {
+    // This existing method can be used for in-memory sorting
+    const itemsToSort = [...items];
+    const fieldKeys = Object.keys(orderBy) as (keyof T)[];
+    itemsToSort.sort((a, b) => { 
+      for (const fieldKey of fieldKeys) {
+        const direction = orderBy[fieldKey];
+        const valA = a[fieldKey]; const valB = b[fieldKey];
+        if (valA === undefined || valA === null) return direction === 'asc' ? -1 : 1; // Consistent null/undefined sort
+        if (valB === undefined || valB === null) return direction === 'asc' ? 1 : -1;
+        if (valA < valB) return direction === 'asc' ? -1 : 1;
+        if (valA > valB) return direction === 'asc' ? 1 : -1;
       }
-      // This is the count *after* filtering and searching, but *before* sorting and pagination.
-      // Sorting doesn't change the count.
+      return 0;
+    });
+    return itemsToSort;
+  }
+
+  public async query(
+    // itemsFromState: Readonly<Item<T>[]>, // Fallback or for comparison, not primary source
+    filterArgs?: Readonly<FilterArgs<T>>
+  ): Promise<QueryResult<T>> {
+    this.logger.debug(`[ListQueriesImpl-${this.listOptions.name}] Executing query with args:`, filterArgs);
+    let baseItems: Item<T>[] = [];
+    let canUseIndex = false;
+    let inMemoryFilteringRequired = true; // Assume true unless a perfect index hit happens
+
+    if (filterArgs?.where) {
+      // Try to find a single, simple indexed condition to use first
+      // Example: where: { status: { equals: 'active' } }
+      for (const fieldKey in filterArgs.where) {
+        if (this.indexedFields.has(fieldKey)) {
+          const fieldCondition = filterArgs.where[fieldKey as keyof T];
+          if (fieldCondition && 'equals' in fieldCondition && Object.keys(fieldCondition).length === 1) {
+            const valueToQuery = (fieldCondition as any)['equals'];
+            this.logger.info(`[ListQueriesImpl-${this.listOptions.name}] Using index '${fieldKey}' for 'equals' query with value:`, valueToQuery);
+            try {
+              baseItems = await this.indexedDBManager.getAllByIndex<T>(this.indexedDBStoreName, fieldKey, valueToQuery);
+              canUseIndex = true;
+              // If this was the *only* where clause, further in-memory 'where' filtering might not be needed on this set.
+              if (Object.keys(filterArgs.where).length === 1) {
+                inMemoryFilteringRequired = false; 
+              }
+              break; // Use the first suitable index found for simplicity
+            } catch (idbError) {
+              this.logger.error(`[ListQueriesImpl-${this.listOptions.name}] Error querying IndexedDB by index '${fieldKey}':`, idbError);
+              // Fallback to full scan if indexed query fails
+              baseItems = await this.indexedDBManager.getAllItems<T>(this.indexedDBStoreName);
+            }
+          }
+          // TODO: Add support for range queries (lt, lte, gt, gte) using getItemsByRange
+          // This would involve checking operator type and using IDBKeyRange.
+        }
+      }
+    }
+
+    if (!canUseIndex) {
+      this.logger.info(`[ListQueriesImpl-${this.listOptions.name}] No suitable index found or used. Fetching all items from IDB store '${this.indexedDBStoreName}'.`);
+      try {
+        baseItems = await this.indexedDBManager.getAllItems<T>(this.indexedDBStoreName);
+      } catch (idbError) {
+        this.logger.error(`[ListQueriesImpl-${this.listOptions.name}] Error fetching all items from IDB store:`, idbError);
+        // Consider fallback to itemsFromState if passed and IDB fails catastrophically.
+        // For now, return empty on error.
+        return { items: [], totalCount: 0 };
+      }
     }
     
-    const countAfterFiltering = processedItems.length;
+    let processedItems = [...baseItems]; // Operate on a copy
 
-    if (filterArgs && filterArgs.orderBy) {
-      processedItems = this.sortItems(processedItems, filterArgs.orderBy);
+    // Apply 'where' filtering in-memory if:
+    // 1. No index was used (processedItems is all items from store)
+    // 2. An index was used, but there are other 'where' clauses not covered by that index query.
+    if (filterArgs?.where && inMemoryFilteringRequired) {
+        this.logger.debug(`[ListQueriesImpl-${this.listOptions.name}] Applying in-memory 'where' filtering.`);
+        processedItems = this.filterByWhere(processedItems, filterArgs.where);
     }
 
+    // Apply 'search' filtering in-memory
+    if (filterArgs?.search && filterArgs.search.value && filterArgs.search.fields.length > 0) {
+        this.logger.debug(`[ListQueriesImpl-${this.listOptions.name}] Applying in-memory 'search' filtering.`);
+        processedItems = this.searchItems(processedItems, filterArgs.search);
+    }
+    
+    const countAfterFiltering = processedItems.length; // This is the total count for pagination
+
+    // Apply 'orderBy' sorting in-memory
+    if (filterArgs?.orderBy) {
+        this.logger.debug(`[ListQueriesImpl-${this.listOptions.name}] Applying in-memory 'orderBy' sorting.`);
+        processedItems = this.sortItems(processedItems, filterArgs.orderBy);
+    }
+
+    // Apply pagination in-memory
     if (filterArgs) {
       const skip = filterArgs.skip ?? 0;
       const take = filterArgs.take;
-
       if (take !== undefined) {
         processedItems = processedItems.slice(skip, skip + take);
       } else if (skip > 0) {
@@ -42,109 +178,7 @@ export class ListQueriesImpl<T extends Record<string, any>> {
       }
     }
     
-    return { items: processedItems, totalCount: countAfterFiltering }; // <-- Return object
-  }
-
-  private filterByWhere(items: Readonly<Item<T>[]>, where: NonNullable<FilterArgs<T>['where']>): Item<T>[] {
-    return items.filter(item => {
-      for (const fieldKey in where) {
-        const fieldCondition = where[fieldKey as keyof T];
-        const itemValue = item[fieldKey as keyof T];
-
-        if (fieldCondition === undefined || itemValue === undefined) { // Check if itemValue is undefined
-            // Special handling for 'not' undefined, or 'equals' undefined
-            if (fieldCondition && typeof fieldCondition === 'object') {
-                 if ('not' in fieldCondition && (fieldCondition as any).not === undefined && itemValue !== undefined) {
-                    continue; // Condition "not: undefined" passes if itemValue is not undefined
-                 } else if ('equals' in fieldCondition && (fieldCondition as any).equals === undefined && itemValue === undefined) {
-                    continue; // Condition "equals: undefined" passes if itemValue is undefined
-                 } else if (('equals' in fieldCondition && (fieldCondition as any).equals !== undefined) || ('not' in fieldCondition && (fieldCondition as any).not !== undefined)) {
-                    // If other specific conditions like equals: value or not: value are set for an undefined itemValue, they should fail unless it's specific undefined check
-                    return false; 
-                 }
-            }
-            // If itemValue is undefined and no specific undefined check matches, it generally shouldn't pass other conditions.
-            // However, if the condition itself is just `undefined` (e.g. `where: { field: undefined }`), skip this field.
-            // This path is primarily for when `itemValue` is undefined.
-             if (fieldCondition === undefined) continue; // if the condition object for the field is undefined, skip.
-             // If itemValue is undefined and condition is not, most ops below will result in `match = false` correctly.
-        }
-
-
-        for (const operator in fieldCondition) {
-          const conditionValue = (fieldCondition as any)[operator];
-          let match = true;
-
-          // Ensure itemValue is not null or undefined for most operations,
-          // unless the operation specifically handles null/undefined (e.g., 'equals', 'not').
-          if (itemValue === null || itemValue === undefined) {
-            if (operator === 'equals') match = itemValue === conditionValue;
-            else if (operator === 'not') match = itemValue !== conditionValue;
-            else { // For other operators, if itemValue is null/undefined, it doesn't match.
-                match = false;
-            }
-          } else { // itemValue is not null or undefined
-            switch (operator) {
-                case 'equals': match = itemValue === conditionValue; break;
-                case 'in': match = Array.isArray(conditionValue) && conditionValue.includes(itemValue); break;
-                case 'not': match = itemValue !== conditionValue; break;
-                case 'lt': match = itemValue < conditionValue; break;
-                case 'lte': match = itemValue <= conditionValue; break;
-                case 'gt': match = itemValue > conditionValue; break;
-                case 'gte': match = itemValue >= conditionValue; break;
-                case 'contains':
-                match = typeof itemValue === 'string' && typeof conditionValue === 'string' && itemValue.toLowerCase().includes(conditionValue.toLowerCase());
-                break;
-                case 'startsWith':
-                match = typeof itemValue === 'string' && typeof conditionValue === 'string' && itemValue.toLowerCase().startsWith(conditionValue.toLowerCase());
-                break;
-                case 'endsWith':
-                match = typeof itemValue === 'string' && typeof conditionValue === 'string' && itemValue.toLowerCase().endsWith(conditionValue.toLowerCase());
-                break;
-                default: match = true; // Unknown operator, don't filter
-            }
-          }
-          if (!match) return false; // If any condition for a field fails, the item is out
-        }
-      }
-      return true; // All conditions for all fields passed
-    });
-  }
-
-  private searchItems(items: Readonly<Item<T>[]>, search: NonNullable<FilterArgs<T>['search']>): Item<T>[] {
-    const searchTerm = search.value.toLowerCase();
-    if (!searchTerm) return [...items]; // No search term, return all items
-
-    return items.filter(item => {
-      return search.fields.some(fieldKey => {
-        const itemValue = item[fieldKey as keyof T];
-        // Ensure itemValue is a string before calling toLowerCase and includes
-        return typeof itemValue === 'string' && itemValue.toLowerCase().includes(searchTerm);
-      });
-    });
-  }
-
-  private sortItems(items: Item<T>[], orderBy: NonNullable<FilterArgs<T>['orderBy']>): Item<T>[] {
-    // Create a shallow copy to sort, preserving the original array if it's from a signal.
-    const itemsToSort = [...items];
-    const fieldKeys = Object.keys(orderBy) as (keyof T)[];
-
-    itemsToSort.sort((a, b) => {
-      for (const fieldKey of fieldKeys) {
-        const direction = orderBy[fieldKey];
-        const valA = a[fieldKey];
-        const valB = b[fieldKey];
-
-        // Handle undefined or null values by treating them as "lesser"
-        if (valA === undefined || valA === null) return (valB === undefined || valB === null) ? 0 : (direction === 'asc' ? -1 : 1);
-        if (valB === undefined || valB === null) return direction === 'asc' ? 1 : -1;
-        
-        // Basic comparison, can be enhanced for different types
-        if (valA < valB) return direction === 'asc' ? -1 : 1;
-        if (valA > valB) return direction === 'asc' ? 1 : -1;
-      }
-      return 0; // Equal
-    });
-    return itemsToSort;
+    this.logger.debug(`[ListQueriesImpl-${this.listOptions.name}] Query completed. Returning ${processedItems.length} items out of ${countAfterFiltering} matched.`);
+    return { items: processedItems, totalCount: countAfterFiltering };
   }
 }
