@@ -1,92 +1,46 @@
+// In ListCRUDImpl.ts
 import {
   Item, CreateItemInput, UpdateItemInput, ListOptions,
-  BaseItem, UpdatesLogs, FieldType // FieldType might not be directly used here but good for context
+  UpdatesLogs, FieldType // Keep FieldType if _handleFileOutput or other logic needs it
 } from '../models/list.model';
-import { FileInput, FileRead } from '../models/file.model';
-import { LocalForageAdapter } from '../adapters/LocalForageAdapter';
-import { FilesAdapter } from '../adapters/FilesAdapter';
-import { EncryptedStorageService } from '../crypto/EncryptedStorage.ts';
-import { IndexedDBManager } from '../utils/IndexedDBManager.ts'; // <-- Import
-import { LoggerService } from '../utils/Logger.ts'; // <-- Import
+import { FileInput, FileRead } from '../models/file.model'; // Keep for _handleFileOutput
+// import { LocalForageAdapter } from './LocalForageAdapter'; // REMOVE
+import { FilesAdapter } from './FilesAdapter';
+// import { EncryptedStorageService } from '../crypto/EncryptedStorage.ts'; // REMOVE if only for LF full item encryption
+import { IndexedDBManager } from '../utils/IndexedDBManager.ts';
+import { LoggerService } from '../utils/Logger.ts';
 
 export class ListCRUDImpl<T extends Record<string, any>> {
-  private localForageStoreName: string;
-  private indexedDBStoreName: string; // <-- New property for IDB store name
+  // private localForageStoreName: string; // REMOVE
+  private indexedDBStoreName: string; 
 
   constructor(
     private listOptions: Readonly<ListOptions<T>>,
-    private localForageAdapter: LocalForageAdapter,
-    private filesAdapter: FilesAdapter,
-    private indexedDBManager: IndexedDBManager, // <-- Inject
-    private logger: LoggerService, // <-- Inject LoggerService
-    private encryptedStorageService?: EncryptedStorageService
+    // private localForageAdapter: LocalForageAdapter, // REMOVE
+    private filesAdapter: FilesAdapter, // Keep for file field handling
+    private indexedDBManager: IndexedDBManager,
+    private logger: LoggerService
+    // private encryptedStorageService?: EncryptedStorageService // REMOVE
   ) {
-    this.localForageStoreName = `list_${listOptions.name}`;
-    this.indexedDBStoreName = `list_${listOptions.name}`; // Same naming convention for IDB store
-    this.logger.info(`ListCRUDImpl for LF store '${this.localForageStoreName}' and IDB store '${this.indexedDBStoreName}' initialized.`);
+    // this.localForageStoreName = `list_${listOptions.name}`; // REMOVE
+    this.indexedDBStoreName = `list_${listOptions.name}`; 
+    this.logger.info(`ListCRUDImpl for IDB store '${this.indexedDBStoreName}' initialized.`);
   }
 
   private generateId(): string { return crypto.randomUUID(); }
 
-  private async _encrypt(data: string): Promise<string> { 
-    if (!this.encryptedStorageService || !this.encryptedStorageService.isKeySet()) { return data; }
-    try {
-      const { iv, encryptedData } = await this.encryptedStorageService.encrypt(data);
-      const ivString = btoa(String.fromCharCode(...iv));
-      const encryptedString = btoa(String.fromCharCode(...new Uint8Array(encryptedData)));
-      return `${ivString}:${encryptedString}`;
-    } catch (e) { this.logger.error(`[${this.localForageStoreName}] Encryption failed:`, e); throw e; }
-  }
+  // REMOVE _encrypt, _decrypt, _serializeAndEncrypt, _deserializeAndDecrypt methods
+  // if their sole purpose was full item encryption for LocalForage.
 
-  private async _decrypt(data: string): Promise<string> { 
-    if (!this.encryptedStorageService || !this.encryptedStorageService.isKeySet() || !data.includes(':')) { return data; }
-    try {
-      const [ivString, encryptedString] = data.split(':', 2); 
-      if (!ivString || !encryptedString) return data; 
-      const iv = new Uint8Array(atob(ivString).split('').map(char => char.charCodeAt(0)));
-      const encryptedDataBuffer = new Uint8Array(atob(encryptedString).split('').map(char => char.charCodeAt(0))).buffer;
-      return await this.encryptedStorageService.decrypt(encryptedDataBuffer, iv);
-    } catch (e) { this.logger.warn(`[${this.localForageStoreName}] Decryption failed, returning raw data:`, e); return data; }
-  }
-
-  private async _serializeAndEncrypt(item: Item<T>): Promise<string | Item<T>> { 
-    if (this.listOptions.replication?.firestore && this.encryptedStorageService?.isKeySet()) {
-        return this._encrypt(JSON.stringify(item));
-    }
-    return item; 
-  }
-
-  private async _deserializeAndDecrypt(data: string | Item<T>): Promise<Item<T>> { 
-    if (typeof data === 'string') {
-        const decryptedString = await this._decrypt(data);
-        try {
-            return JSON.parse(decryptedString) as Item<T>;
-        } catch (e) {
-            this.logger.error(`[${this.localForageStoreName}] Failed to parse decrypted string: ${decryptedString.substring(0,100)}...`, e);
-            throw new Error('Failed to parse decrypted item data.');
-        }
-    }
-    return data; 
-  }
-  
-  private async _handleFileOutput(
-    itemData: Partial<T>, 
-    filesInput?: { [K in keyof T]?: FileInput }
-  ): Promise<Partial<T>> { 
+  private async _handleFileOutput(itemData: T, filesInput?: { [K in keyof T]?: FileInput }): Promise<Partial<T>> {
     if (!filesInput) return {};
     const fileHandlingResults: Partial<T> = {};
     for (const fieldKey in filesInput) {
-        if (!Object.prototype.hasOwnProperty.call(filesInput, fieldKey) || !this.listOptions.fields[fieldKey as keyof T]) {
-            continue;
-        }
         const fileInputField = filesInput[fieldKey as keyof T];
-        if (fileInputField && this.listOptions.fields[fieldKey as keyof T] === 'file') {
-            try {
-                const fileMeta = await this.filesAdapter.addFile(fileInputField);
-                (fileHandlingResults as any)[fieldKey] = fileMeta.id; 
-            } catch (e) {
-                this.logger.error(`[${this.localForageStoreName}] Error adding file for field ${String(fieldKey)}:`, e);
-            }
+        // Ensure fieldKey is a valid key of T for listOptions.fields access
+        if (fileInputField && Object.prototype.hasOwnProperty.call(this.listOptions.fields, fieldKey) && this.listOptions.fields[fieldKey as keyof T] === 'file') {
+            const fileMeta = await this.filesAdapter.addFile(fileInputField);
+            (fileHandlingResults as any)[fieldKey] = fileMeta.id;
         }
     }
     return fileHandlingResults;
@@ -95,68 +49,67 @@ export class ListCRUDImpl<T extends Record<string, any>> {
   async createItem(itemInput: CreateItemInput<T>): Promise<Item<T>> {
     const id = this.generateId();
     const now = new Date().toISOString();
-    const fileDataFields = await this._handleFileOutput(itemInput.data, itemInput.files as { [K in keyof T]?: FileInput });
+    const fileData = await this._handleFileOutput(itemInput.data, itemInput.files as { [K in keyof T]?: FileInput });
 
     const newItem: Item<T> = {
-        ...itemInput.data,
-        ...fileDataFields,
-        _id: id, createdAt: now, createdBy: itemInput.createdBy || 'system',
-        _updatedAt: now, updatesLogs: [], _deleted: false,
+      ...itemInput.data,
+      ...fileData,
+      _id: id, createdAt: now, createdBy: itemInput.createdBy || 'system',
+      _updatedAt: now, updatesLogs: [], _deleted: false,
     } as Item<T>;
 
-    // Store plain item in IndexedDB
     try {
-      await this.indexedDBManager.putItem(this.indexedDBStoreName, { ...newItem }); 
-      this.logger.debug(`[ListCRUDImpl] Item ${id} successfully put into IDB store ${this.indexedDBStoreName}.`);
+      await this.indexedDBManager.putItem(this.indexedDBStoreName, { ...newItem });
+      this.logger.debug(`[ListCRUDImpl] Item ${id} successfully PUT into IDB store ${this.indexedDBStoreName}.`);
     } catch (idbError) {
-      this.logger.error(`[ListCRUDImpl] Failed to put item ${id} into IDB store ${this.indexedDBStoreName}:`, idbError);
+      this.logger.error(`[ListCRUDImpl] Failed to PUT item ${id} into IDB store ${this.indexedDBStoreName}:`, idbError);
+      throw idbError; // Re-throw to allow ListImpl to catch and set error state
     }
-
-    const storableItemForLF = await this._serializeAndEncrypt({ ...newItem }); 
-    await this.localForageAdapter.set(id, storableItemForLF, this.localForageStoreName);
-    this.logger.debug(`[ListCRUDImpl] Item ${id} successfully set in LocalForage store ${this.localForageStoreName}.`);
     
     return newItem;
   }
 
   async readItem(id: string): Promise<Item<T> | undefined> {
-    const data = await this.localForageAdapter.get<string | Item<T>>(id, this.localForageStoreName);
-    if (data === null || data === undefined) return undefined;
-    return this._deserializeAndDecrypt(data);
+    try {
+      const item = await this.indexedDBManager.getItem<Item<T>>(this.indexedDBStoreName, id);
+      this.logger.debug(`[ListCRUDImpl] Item ${id} read from IDB store ${this.indexedDBStoreName}. Found: ${!!item}`);
+      return item;
+    } catch (idbError) {
+      this.logger.error(`[ListCRUDImpl] Failed to GET item ${id} from IDB store ${this.indexedDBStoreName}:`, idbError);
+      throw idbError;
+    }
   }
 
   async updateItem(itemUpdate: UpdateItemInput<T>): Promise<Item<T>> {
-    const currentItem = await this.readItem(itemUpdate.id); 
-    if (!currentItem) throw new Error(`[${this.localForageStoreName}] Item with id ${itemUpdate.id} not found.`);
+    const currentItem = await this.readItem(itemUpdate.id);
+    if (!currentItem) throw new Error(`Item with id ${itemUpdate.id} not found for update.`);
 
-    const fileDataFields = await this._handleFileOutput(itemUpdate.data as T, itemUpdate.files as { [K in keyof T]?: FileInput });
-    const updatedItemData: Partial<T> = { ...itemUpdate.data, ...fileDataFields };
+    const fileData = await this._handleFileOutput(itemUpdate.data as T, itemUpdate.files as { [K in keyof T]?: FileInput });
+    const updatedItemData: Partial<T> = { ...itemUpdate.data, ...fileData };
     
-    const updatedItem: Item<T> = { ...currentItem, ...(updatedItemData as T), _updatedAt: new Date().toISOString() };
-    const logEntry: UpdatesLogs<T> = {
-        at: updatedItem._updatedAt, by: itemUpdate.updatedBy || 'system',
-        before: {} as Partial<T>, after: {} as Partial<T>
+    const updatedItem: Item<T> = { 
+      ...currentItem, 
+      ...updatedItemData, 
+      _updatedAt: new Date().toISOString() 
     };
-    updatedItem.updatesLogs = [...(currentItem.updatesLogs || []), logEntry];
+    updatedItem.updatesLogs = [...(currentItem.updatesLogs || []), {
+        at: updatedItem._updatedAt, by: itemUpdate.updatedBy || 'system',
+        before: { /* selective diff */ } as Partial<T>, after: { /* selective diff */ } as Partial<T>
+    }];
 
-    // Store plain updated item in IndexedDB
     try {
       await this.indexedDBManager.putItem(this.indexedDBStoreName, { ...updatedItem });
-      this.logger.debug(`[ListCRUDImpl] Item ${updatedItem._id} successfully updated in IDB store ${this.indexedDBStoreName}.`);
+      this.logger.debug(`[ListCRUDImpl] Item ${updatedItem._id} successfully UPDATED in IDB store ${this.indexedDBStoreName}.`);
     } catch (idbError) {
-      this.logger.error(`[ListCRUDImpl] Failed to update item ${updatedItem._id} in IDB store ${this.indexedDBStoreName}:`, idbError);
+      this.logger.error(`[ListCRUDImpl] Failed to UPDATE item ${updatedItem._id} in IDB store ${this.indexedDBStoreName}:`, idbError);
+      throw idbError;
     }
-
-    const storableItemForLF = await this._serializeAndEncrypt({ ...updatedItem });
-    await this.localForageAdapter.set(itemUpdate.id, storableItemForLF, this.localForageStoreName);
-    this.logger.debug(`[ListCRUDImpl] Item ${updatedItem._id} successfully updated in LocalForage store ${this.localForageStoreName}.`);
-
     return updatedItem;
   }
 
-  async deleteItem(id: string, userId?: string): Promise<Item<T>> { 
+  async deleteItem(id: string, userId?: string): Promise<Item<T>> { // Soft delete
     const item = await this.readItem(id);
-    if (!item) throw new Error(`[${this.localForageStoreName}] Item with id ${id} not found for deletion.`);
+    if (!item) throw new Error(`Item with id ${id} not found for soft deletion.`);
 
     item._deleted = true;
     item._deletedAt = new Date().toISOString();
@@ -167,28 +120,20 @@ export class ListCRUDImpl<T extends Record<string, any>> {
         before: { _deleted: false } as Partial<T>, after: { _deleted: true } as Partial<T>
     }];
 
-    // Store plain soft-deleted item in IndexedDB
     try {
-      await this.indexedDBManager.putItem(this.indexedDBStoreName, { ...item });
-      this.logger.debug(`[ListCRUDImpl] Item ${id} (soft deleted) successfully updated in IDB store ${this.indexedDBStoreName}.`);
+      await this.indexedDBManager.putItem(this.indexedDBStoreName, { ...item }); // Update in IDB with _deleted flag
+      this.logger.debug(`[ListCRUDImpl] Item ${id} (soft deleted) successfully UPDATED in IDB store ${this.indexedDBStoreName}.`);
     } catch (idbError) {
-      this.logger.error(`[ListCRUDImpl] Failed to update soft-deleted item ${id} in IDB store ${this.indexedDBStoreName}:`, idbError);
+      this.logger.error(`[ListCRUDImpl] Failed to UPDATE soft-deleted item ${id} in IDB store ${this.indexedDBStoreName}:`, idbError);
+      throw idbError;
     }
-
-    const storableItemForLF = await this._serializeAndEncrypt({ ...item });
-    await this.localForageAdapter.set(id, storableItemForLF, this.localForageStoreName);
-    this.logger.debug(`[ListCRUDImpl] Item ${id} (soft deleted) successfully updated in LocalForage store ${this.localForageStoreName}.`);
-    
     return item;
   }
 
   async restoreItem(id: string, userId?: string): Promise<Item<T>> {
     const item = await this.readItem(id);
-    if (!item) throw new Error(`[${this.localForageStoreName}] Item with id ${id} not found for restoration.`);
-    if (!item._deleted) {
-        this.logger.warn(`[${this.localForageStoreName}] Item with id ${id} is not deleted. Restoration aborted.`);
-        return item; 
-    }
+    if (!item) throw new Error(`Item with id ${id} not found for restoration.`);
+    if (!item._deleted) throw new Error(`Item with id ${id} is not deleted.`); // Stricter handling
 
     const updateLog: UpdatesLogs<T> = { 
         at: new Date().toISOString(), by: userId || 'system',
@@ -198,58 +143,54 @@ export class ListCRUDImpl<T extends Record<string, any>> {
     item._deleted = false; delete item._deletedAt; delete item.deletedBy;
     item._updatedAt = updateLog.at; item.updatesLogs = [...(item.updatesLogs || []), updateLog];
 
-    // Store plain restored item in IndexedDB
     try {
-      await this.indexedDBManager.putItem(this.indexedDBStoreName, { ...item });
-      this.logger.debug(`[ListCRUDImpl] Item ${id} (restored) successfully updated in IDB store ${this.indexedDBStoreName}.`);
+      await this.indexedDBManager.putItem(this.indexedDBStoreName, { ...item }); // Update in IDB
+      this.logger.debug(`[ListCRUDImpl] Item ${id} (restored) successfully UPDATED in IDB store ${this.indexedDBStoreName}.`);
     } catch (idbError) {
-      this.logger.error(`[ListCRUDImpl] Failed to update restored item ${id} in IDB store ${this.indexedDBStoreName}:`, idbError);
+      this.logger.error(`[ListCRUDImpl] Failed to UPDATE restored item ${id} in IDB store ${this.indexedDBStoreName}:`, idbError);
+      throw idbError;
     }
-
-    const storableItemForLF = await this._serializeAndEncrypt({ ...item });
-    await this.localForageAdapter.set(id, storableItemForLF, this.localForageStoreName);
-    this.logger.debug(`[ListCRUDImpl] Item ${id} (restored) successfully updated in LocalForage store ${this.localForageStoreName}.`);
-
     return item;
   }
 
   async purgeDeletedItem(id: string): Promise<void> {
-    const itemForFileCleanup = await this.readItem(id); // Read before any deletion for file cleanup
-
-    // First, delete from IndexedDB
+    const item = await this.readItem(id); // Read from IDB to get file info
+    
+    // Delete from IndexedDB first
     try {
       await this.indexedDBManager.deleteItem(this.indexedDBStoreName, id);
-      this.logger.debug(`[ListCRUDImpl] Item ${id} successfully deleted from IDB store ${this.indexedDBStoreName}.`);
+      this.logger.debug(`[ListCRUDImpl] Item ${id} successfully DELETED from IDB store ${this.indexedDBStoreName}.`);
     } catch (idbError) {
-      this.logger.error(`[ListCRUDImpl] Failed to delete item ${id} from IDB store ${this.indexedDBStoreName}:`, idbError);
+      this.logger.error(`[ListCRUDImpl] Failed to DELETE item ${id} from IDB store ${this.indexedDBStoreName}:`, idbError);
+      throw idbError; // If IDB delete fails, perhaps don't proceed with file deletion? Or make it more resilient.
     }
 
-    if (itemForFileCleanup) { // Use the item read before deletion for file cleanup
+    // Then, delete associated files (if any)
+    if (item) { // Item data was successfully read before deletion attempt from IDB
         for (const fieldKey in this.listOptions.fields) {
-            if (this.listOptions.fields[fieldKey as keyof T] === 'file') {
-                const fileId = itemForFileCleanup[fieldKey as keyof T] as unknown as string;
+            if (Object.prototype.hasOwnProperty.call(this.listOptions.fields, fieldKey) && this.listOptions.fields[fieldKey as keyof T] === 'file') {
+                const fileId = item[fieldKey as keyof T] as unknown as string;
                 if (fileId && typeof fileId === 'string') {
-                    try { await this.filesAdapter.deleteFile(fileId); } 
-                    catch (e) { this.logger.warn(`[${this.localForageStoreName}] Failed to delete file ${fileId} for item ${id}:`, e); }
+                    try { 
+                        await this.filesAdapter.deleteFile(fileId); // This deletes from FilesAdapter's metadata store (IDB soon) and blob store (LocalForage now, OPFS later)
+                        this.logger.debug(`[ListCRUDImpl] Associated file ${fileId} for item ${id} deleted via FilesAdapter.`);
+                    } 
+                    catch (e) { this.logger.warn(`[ListCRUDImpl] Failed to delete associated file ${fileId} for item ${id}:`, e); }
                 }
             }
         }
     }
-    await this.localForageAdapter.remove(id, this.localForageStoreName);
-    this.logger.debug(`[ListCRUDImpl] Item ${id} purged from LocalForage store ${this.localForageStoreName}.`);
+    this.logger.info(`[ListCRUDImpl] Item ${id} purged from IDB. Associated file cleanup attempted.`);
   }
   
   async getAllItems(): Promise<Item<T>[]> {
-    const allItems: Item<T>[] = [];
-    const keys = await this.localForageAdapter.keys(this.localForageStoreName);
-    for (const key of keys) {
-        if (typeof key === 'string') { 
-             const item = await this.readItem(key);
-             if (item) {
-                 allItems.push(item);
-             }
-        }
+    try {
+      const items = await this.indexedDBManager.getAllItems<Item<T>>(this.indexedDBStoreName);
+      this.logger.debug(`[ListCRUDImpl] Successfully fetched ${items.length} items from IDB store ${this.indexedDBStoreName} for getAllItems.`);
+      return items;
+    } catch (idbError) {
+      this.logger.error(`[ListCRUDImpl] Failed to GET ALL items from IDB store ${this.indexedDBStoreName}:`, idbError);
+      throw idbError;
     }
-    return allItems;
   }
 }
