@@ -1,44 +1,48 @@
 import { Item, FilterArgs } from '../models/list.model';
 
+export interface QueryResult<T> {
+  items: Item<T>[];
+  totalCount: number;
+}
+
 export class ListQueriesImpl<T extends Record<string, any>> {
 
   constructor(private listName: string) {
     console.log(`ListQueriesImpl for ${this.listName} initialized`);
   }
 
-  public query(items: Readonly<Item<T>[]>, filterArgs?: Readonly<FilterArgs<T>>): Item<T>[] {
-    let processedItems = [...items]; // Start with a mutable copy
+  public query(items: Readonly<Item<T>[]>, filterArgs?: Readonly<FilterArgs<T>>): QueryResult<T> { // <-- Return QueryResult
+    let processedItems = [...items];
 
-    if (!filterArgs) {
-      return processedItems;
+    if (filterArgs) {
+      if (filterArgs.where) {
+        processedItems = this.filterByWhere(processedItems, filterArgs.where);
+      }
+      if (filterArgs.search && filterArgs.search.value && filterArgs.search.fields.length > 0) {
+        processedItems = this.searchItems(processedItems, filterArgs.search);
+      }
+      // This is the count *after* filtering and searching, but *before* sorting and pagination.
+      // Sorting doesn't change the count.
     }
+    
+    const countAfterFiltering = processedItems.length;
 
-    // 1. Filtering by 'where'
-    if (filterArgs.where) {
-      processedItems = this.filterByWhere(processedItems, filterArgs.where);
-    }
-
-    // 2. Searching
-    if (filterArgs.search && filterArgs.search.value && filterArgs.search.fields.length > 0) {
-      processedItems = this.searchItems(processedItems, filterArgs.search);
-    }
-
-    // 3. Sorting
-    if (filterArgs.orderBy) {
-      // sortItems will sort in place if it modifies the array directly,
-      // or return a new sorted array. Let's assume it returns a new sorted array.
+    if (filterArgs && filterArgs.orderBy) {
       processedItems = this.sortItems(processedItems, filterArgs.orderBy);
     }
 
-    // 4. Pagination (skip and take)
-    const skip = filterArgs.skip ?? 0;
-    const take = filterArgs.take; // undefined means take all
+    if (filterArgs) {
+      const skip = filterArgs.skip ?? 0;
+      const take = filterArgs.take;
 
-    if (take === undefined) {
-      return processedItems.slice(skip);
-    } else {
-      return processedItems.slice(skip, skip + take);
+      if (take !== undefined) {
+        processedItems = processedItems.slice(skip, skip + take);
+      } else if (skip > 0) {
+        processedItems = processedItems.slice(skip);
+      }
     }
+    
+    return { items: processedItems, totalCount: countAfterFiltering }; // <-- Return object
   }
 
   private filterByWhere(items: Readonly<Item<T>[]>, where: NonNullable<FilterArgs<T>['where']>): Item<T>[] {

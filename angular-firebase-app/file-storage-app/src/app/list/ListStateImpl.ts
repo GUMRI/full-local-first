@@ -117,8 +117,25 @@ export class ListStateImpl<T> {
     });
   }
   
+  public readonly totalFilteredCount: WritableSignal<number> = signal(0); // <-- New signal
+
+  // ... (constructor, existing mutators for signals) ...
+
   // Method to apply filters - to be used by ListQueriesImpl or ListImpl
-  applyFilteredItems(filtered: Item<T>[]) {
-    this.filteredItems.set(filtered);
+  applyFilteredResult(filteredItems: Item<T>[], totalCount: number) { // <-- Modified method
+    this.filteredItems.set(filteredItems);
+    this.totalFilteredCount.set(totalCount);
+  }
+  
+  // Ensure existing setItems also resets totalFilteredCount appropriately
+  setItems(newItems: Item<T>[]): void {
+    this.items.set(newItems);
+    // When all items are reset, filteredItems should also reset, and totalFilteredCount reflects this state.
+    // The effect in ListImpl will recalculate based on new items.
+    // However, if no filters are applied by default, totalFilteredCount should be newItems.length.
+    // This is best handled by the effect in ListImpl calling applyFilteredResult.
+    // For now, let's ensure applyFilteredResult handles both.
+    // The effect in ListImpl will call applyFilteredResult which sets both.
+    this.setStatus('loaded');
   }
 }

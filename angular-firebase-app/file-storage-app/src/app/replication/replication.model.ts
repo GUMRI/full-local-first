@@ -1,17 +1,17 @@
-import { Item, ListOptions } from '../models/list.model';
-import { Firestore } from '@angular/fire/firestore'; // For Firestore specific types
-import { FirebaseStorage } from '@angular/fire/storage'; // For Storage specific types
+import { Item, ListOptions } from '../models/list.model'; // Keep existing imports
+import { Firestore } from '@angular/fire/firestore'; 
+import { FirebaseStorage } from '@angular/fire/storage';
+import { FileReplicationInput } from '../models/file.model'; // <-- Add this import
 
+// ... (Checkpoint, ReplicationPullResult, ReplicationPushResult interfaces remain the same) ...
 export interface Checkpoint {
   listName: string;
-  lastPulledAt?: string; // ISO string for timestamp-based sync
-  // lastPulledVersion?: number; // For version-based sync
-  // other checkpoint data
+  lastPulledAt?: string;
 }
 
 export interface ReplicationPullResult<T> {
   pulledItems: Item<T>[];
-  newCheckpoint: Partial<Checkpoint>; // Or the full new checkpoint data
+  newCheckpoint: Partial<Checkpoint>;
   errors?: any[];
 }
 
@@ -21,19 +21,33 @@ export interface ReplicationPushResult {
   errors?: any[];
 }
 
-// Interface for a specific replication provider strategy
-export interface ReplicationStrategy<T extends Record<string, any>> {
-  readonly strategyName: string; // e.g., 'firestore'
 
-  initialize(listOptions: Readonly<ListOptions<T>>,
-             firestore: Firestore, 
-             firebaseStorage?: FirebaseStorage): Promise<void>;
+export interface ReplicationStrategy<T extends Record<string, any>> {
+  readonly strategyName: string;
+
+  initialize(
+    listOptions: Readonly<ListOptions<T>>,
+    firestore: Firestore, 
+    firebaseStorage?: FirebaseStorage
+  ): Promise<void>;
 
   pullChanges(listName: string, currentCheckpoint: Checkpoint): Promise<ReplicationPullResult<T>>;
   
   pushChanges(listName: string, itemsToPush: Item<T>[]): Promise<ReplicationPushResult>;
 
-  // Optional: Method to handle file replication for this strategy
-  // pushFile?(fileData: { id: string, name: string, blob: Blob, path: string }): Promise<any>;
-  // pullFile?(fileMeta: { id: string, name: string, path: string }): Promise<Blob>;
+  // --- New optional methods for file replication ---
+  pushFile?(
+    fileInput: FileReplicationInput, 
+    listOptions: Readonly<ListOptions<T>> // Pass listOptions for context if needed
+  ): Promise<{ storagePath: string; downloadUrl?: string; }>; // downloadUrl might not always be available/needed
+
+  pullFile?(
+    fileMeta: { id: string; storagePath: string; fileName: string; }, // Added fileName for potential use
+    listOptions: Readonly<ListOptions<T>>
+  ): Promise<Blob>;
+
+  deleteFile?(
+    fileMeta: { id: string; storagePath: string; },
+    listOptions: Readonly<ListOptions<T>>
+  ): Promise<void>;
 }
