@@ -3,6 +3,7 @@ import { Signal } from '@angular/core';
 import { Firestore } from '@angular/fire/firestore';
 import { Storage } from '@angular/fire/storage';
 import { Observable } from 'rxjs';
+import { MongoQuery, RxDocumentData } from 'rxdb';
 
 
 
